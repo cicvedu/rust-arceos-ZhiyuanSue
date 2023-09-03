@@ -1,6 +1,6 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, string::ToString, vec::Vec};
 
 use axfs_vfs::{VfsDirEntry, VfsNodeAttr, VfsNodeOps, VfsNodeRef, VfsNodeType};
 use axfs_vfs::{VfsError, VfsResult};
@@ -65,6 +65,20 @@ impl DirNode {
             }
         }
         children.remove(name);
+        Ok(())
+    }
+
+    /// Rename a node by the given name in this directory.
+    pub fn rename_node(&self, src_name: &str, dst_name: &str) -> VfsResult {
+        let mut children =self.children.write();
+        let node = children.get(src_name).ok_or(VfsError::NotFound)?;
+        if let Some(dir) = node.as_any().downcast_ref::<DirNode>() {
+            if !dir.children.read().is_empty() {
+                return Err(VfsError::DirectoryNotEmpty);
+            }
+        }
+        let value=children.get(src_name).unwrap().clone();
+        children.insert(dst_name.to_string(),value);
         Ok(())
     }
 }
@@ -166,7 +180,34 @@ impl VfsNodeOps for DirNode {
     }
 
     fn rename(&self, _src: &str, _dst: &str) -> VfsResult {
-        todo!("Implement rename for ramfs!");
+        let (src_name,src_rest) = split_path(_src);
+        let (dst_name,dst_rest) = split_path(_dst);
+        match dst_rest{
+            None => { return Ok(()) }
+            Some(dst_rest) => {
+                if let Some(src_rest) = src_rest {
+                    match src_name {
+                        "" | "." => self.rename(src_rest,dst_rest),
+                        ".." => self.parent().ok_or(VfsError::NotFound)?.rename(src_rest,dst_rest),
+                        _ => {
+                            let subdir = self
+                                .children
+                                .read()
+                                .get(src_name)
+                                .ok_or(VfsError::NotFound)?
+                                .clone();
+                            subdir.rename(src_name,dst_rest)
+                        }
+                    }
+                } else if src_name.is_empty() || dst_name.is_empty() || src_name == "." || src_name == ".." {
+                    Err(VfsError::InvalidInput) // remove '.' or '..
+                } else {
+                    self.rename_node(src_name,dst_rest)
+                }
+            }
+        }
+        
+        //todo!("Implement rename for ramfs!");
     }
 
     axfs_vfs::impl_vfs_dir_default! {}
